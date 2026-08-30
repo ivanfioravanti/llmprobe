@@ -54,6 +54,8 @@ export interface ReasoningReport {
   temperature: number;
   bySource: ReasoningSourceSummary[];
   cases: ReasoningCaseResult[];
-  /** Set when --eval-questions or --eval-cases narrowed the set. */
+  /** Set when --eval-questions or --eval-cases narrowed the set, or the run aborted early. */
   scopeNote: string | null;
+  /** Set when the run stopped early; the completed cases are still reported. */
+  aborted: { reason: "budget" | "unreachable"; message: string } | null;
 }

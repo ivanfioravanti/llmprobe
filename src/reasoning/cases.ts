@@ -6,7 +6,7 @@ import type { ReasoningCase } from "./types";
  * questions derived from public CVE writeups). Ported from ds4-eval; the
  * SuperGPQA slice is audited, bad rows were replaced rather than re-keyed.
  */
-export const REASONING_CASES: ReasoningCase[] = [
+const CASES: ReasoningCase[] = [
   {
     source: "GPQA Diamond",
     id: "recNu3MXkvWUzHZr9",
@@ -1241,3 +1241,28 @@ export const REASONING_CASES: ReasoningCase[] = [
     answer: "10-14",
   },
 ];
+
+/** Proportional (Bresenham) merge: any prefix of the result holds each list's share. */
+function interleave<T>(a: T[], b: T[]): T[] {
+  const out: T[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (
+      j >= b.length ||
+      (i < a.length && (i + 1) * b.length <= (j + 1) * a.length)
+    ) {
+      out.push(a[i++]!);
+    } else {
+      out.push(b[j++]!);
+    }
+  }
+  return out;
+}
+
+// The literal above interleaves GPQA/SuperGPQA/AIME by hand but parks COMPSEC
+// at the tail; weave it in so an --eval-questions prefix samples every source.
+export const REASONING_CASES: ReasoningCase[] = interleave(
+  CASES.filter((c) => c.source !== "COMPSEC"),
+  CASES.filter((c) => c.source === "COMPSEC"),
+);

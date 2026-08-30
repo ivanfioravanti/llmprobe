@@ -2,9 +2,10 @@ import { BudgetExceededError, TargetUnreachableError } from "../core/client";
 import type { RunContext } from "../core/context";
 import {
   answerMatches,
-  extractAnswer,
+  extractAnswerDetailed,
   isCompsec,
   isMultipleChoice,
+  visibleText,
 } from "./grade";
 import { REASONING_CASES } from "./cases";
 import type {
@@ -93,6 +94,7 @@ export async function runReasoning(
 
   const cases = selectCases(REASONING_CASES, opts);
   const results: ReasoningCaseResult[] = [];
+  let aborted: ReasoningReport["aborted"] = null;
 
   for (const [i, tc] of cases.entries()) {
     const started = Date.now();
@@ -120,14 +122,16 @@ export async function runReasoning(
         { timeoutMs: null },
       );
       const text = res.reply.text ?? "";
-      const got = extractAnswer(tc, text);
-      const passed = answerMatches(tc, got);
+      const { got, anchored } = extractAnswerDetailed(tc, text);
       const truncated = res.reply.finishReason === "length";
+      // A truncated reply never finished; a match there only counts when it
+      // came from an explicit answer line, not a lucky trailing token.
+      const passed = answerMatches(tc, got) && (!truncated || anchored);
       result = {
         ...base,
         status: passed ? "passed" : truncated ? "stopped" : "failed",
         got,
-        text: text.replace(/[\s\S]*<\/think>/, "").trim(),
+        text: visibleText(text).trim(),
         finishReason: res.reply.finishReason,
         outputTokens: res.reply.usage.outputTokens,
         reasoningTokens: res.reply.usage.reasoningTokens,
@@ -138,7 +142,12 @@ export async function runReasoning(
         err instanceof TargetUnreachableError ||
         err instanceof BudgetExceededError
       ) {
-        throw err;
+        // Keep what was answered; hours of eval work should survive the abort.
+        aborted = {
+          reason: err instanceof BudgetExceededError ? "budget" : "unreachable",
+          message: err.message,
+        };
+        break;
       }
       result = {
         ...base,
@@ -176,8 +185,13 @@ export async function runReasoning(
   const count = (st: ReasoningCaseResult["status"]) =>
     results.filter((r) => r.status === st).length;
 
-  const scopeNote =
-    cases.length !== REASONING_CASES.length
+  const scopeNote = aborted
+    ? `stopped after ${results.length} of ${cases.length} questions (${
+        aborted.reason === "budget"
+          ? "token budget exhausted"
+          : "target unreachable"
+      }) — not comparable to a full run`
+    : cases.length !== REASONING_CASES.length
       ? `${cases.length} of ${REASONING_CASES.length} questions — not comparable to a full run`
       : null;
 
@@ -191,5 +205,6 @@ export async function runReasoning(
     bySource,
     cases: results,
     scopeNote,
+    aborted,
   };
 }

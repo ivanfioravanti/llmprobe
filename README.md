@@ -178,7 +178,7 @@ llmprobe localhost:8080 --eval-only --eval-cases 1,5,9
 llmprobe localhost:8080 --eval-only --eval-cases aime
 ```
 
-`--eval-only` skips everything but surface discovery and the eval. `--eval-questions n` takes the first n, `--eval-cases` takes 1-based numbers, case ids, or a source name (`gpqa`, `supergpqa`, `aime`, `compsec`); either one is noted on the report since a 10-question run is not comparable to a full one. `--sampling` applies here too; the default is greedy. Every question's extracted answer and visible text is kept in the saved JSON, so a run can be regraded offline.
+`--eval-only` skips everything but surface discovery and the eval. `--eval-questions n` takes the first n (the deck interleaves all four sources, so any prefix samples each), `--eval-cases` takes 1-based numbers, case ids, or a source name (`gpqa`, `supergpqa`, `aime`, `compsec`); either one is noted on the report since a 10-question run is not comparable to a full one. `--sampling` applies here too; the default is greedy. Every question's extracted answer and visible text is kept in the saved JSON, so a run can be regraded offline.
 
 This is the one intelligence benchmark in llmprobe, and it is small on purpose: it is a regression harness for "did this engine or quant make the model dumber", not a leaderboard. On a thinking model it is also by far the most expensive thing here.
 

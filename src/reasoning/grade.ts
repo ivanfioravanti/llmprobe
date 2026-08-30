@@ -12,25 +12,27 @@ export const isMultipleChoice = (tc: ReasoningCase): boolean =>
 export const isCompsec = (tc: ReasoningCase): boolean =>
   tc.source === "COMPSEC";
 
-function visibleText(generated: string): string {
+export function visibleText(generated: string): string {
   const i = generated.lastIndexOf("</think>");
   return i >= 0 ? generated.slice(i + 8) : generated;
 }
 
-/** Offset of the last "answer" followed by ':', else the first "answer", else -1. */
+/** Offset of the last "answer" followed by ':', else the first bare "answer", else -1. */
 function findLastAnswerMarker(visible: string): number {
   let last = -1;
+  let first = -1;
   const lower = visible.toLowerCase();
   let p = lower.indexOf("answer");
   while (p >= 0) {
     if (boundary(visible[p - 1], visible[p + 6])) {
+      if (first < 0) first = p;
       let q = p + 6;
       while (q < visible.length && /\s/.test(visible[q]!)) q++;
       if (visible[q] === ":") last = p;
     }
     p = lower.indexOf("answer", p + 1);
   }
-  return last >= 0 ? last : lower.indexOf("answer");
+  return last >= 0 ? last : first;
 }
 
 const NEGATION_CUES = new Set([
@@ -74,8 +76,22 @@ function letterIsNegated(text: string, start: number, at: number): boolean {
   return false;
 }
 
-function findAnswerLetter(generated: string, nchoices: number): string {
-  if (nchoices <= 0) return "?";
+/** `anchored` means the answer came from an explicit "Answer:" marker, not a trailing-token fallback. */
+export interface ExtractedAnswer {
+  got: string;
+  anchored: boolean;
+}
+
+const found = (got: string, anchored: boolean): ExtractedAnswer => ({
+  got,
+  anchored,
+});
+
+function findAnswerLetter(
+  generated: string,
+  nchoices: number,
+): ExtractedAnswer {
+  if (nchoices <= 0) return found("?", false);
   const visible = visibleText(generated);
   const max = String.fromCharCode(64 + nchoices);
   const inRange = (c: string) => c >= "A" && c <= max;
@@ -97,15 +113,16 @@ function findAnswerLetter(generated: string, nchoices: number): string {
         if (n !== undefined && n >= "a" && n <= "z") continue;
       }
       if (letterIsNegated(visible, answer, p)) continue;
-      return c;
+      return found(c, true);
     }
   }
 
   for (let p = visible.length - 1; p >= 0; p--) {
     const c = visible[p]!.toUpperCase();
-    if (inRange(c) && boundary(visible[p - 1], visible[p + 1])) return c;
+    if (inRange(c) && boundary(visible[p - 1], visible[p + 1]))
+      return found(c, false);
   }
-  return "?";
+  return found("?", false);
 }
 
 const normalizeInteger = (s: string): string => s.replace(/^0+(?=\d)/, "");
@@ -115,7 +132,7 @@ function firstInteger(s: string): string | null {
   return m ? normalizeInteger(m[0]) : null;
 }
 
-function findIntegerAnswer(generated: string): string {
+function findIntegerAnswer(generated: string): ExtractedAnswer {
   const visible = visibleText(generated);
   const answer = findLastAnswerMarker(visible);
   if (answer >= 0) {
@@ -125,12 +142,14 @@ function findIntegerAnswer(generated: string): string {
     // "m+n = 256+37 = 293": the stated result is right of the last '='.
     const eq = line.lastIndexOf("=");
     const rhs = eq >= 0 ? firstInteger(line.slice(eq + 1)) : null;
-    if (rhs !== null) return rhs;
+    if (rhs !== null) return found(rhs, true);
     const first = firstInteger(line);
-    if (first !== null) return first;
+    if (first !== null) return found(first, true);
   }
   const all = visible.match(/\d+/g);
-  return all ? normalizeInteger(all[all.length - 1]!) : "?";
+  return all
+    ? found(normalizeInteger(all[all.length - 1]!), false)
+    : found("?", false);
 }
 
 /** "line 9", "9 and 15", "20-22" → "9", "9,15", "20-22". */
@@ -142,7 +161,7 @@ function normalizeLineSpec(line: string): string {
   return parts.length ? parts.join(",") : "?";
 }
 
-function findCompsecAnswer(generated: string): string {
+function findCompsecAnswer(generated: string): ExtractedAnswer {
   const visible = visibleText(generated);
   const answer = findLastAnswerMarker(visible);
   if (answer >= 0) {
@@ -150,7 +169,7 @@ function findCompsecAnswer(generated: string): string {
     const nl = line.indexOf("\n");
     if (nl >= 0) line = line.slice(0, nl);
     const spec = normalizeLineSpec(line);
-    if (spec !== "?") return spec;
+    if (spec !== "?") return found(spec, true);
   }
   return findIntegerAnswer(generated);
 }
@@ -177,11 +196,18 @@ function compsecMatches(expected: string, got: string): boolean {
   return true;
 }
 
-export function extractAnswer(tc: ReasoningCase, generated: string): string {
+export function extractAnswerDetailed(
+  tc: ReasoningCase,
+  generated: string,
+): ExtractedAnswer {
   if (isMultipleChoice(tc))
     return findAnswerLetter(generated, tc.choices!.length);
   if (isCompsec(tc)) return findCompsecAnswer(generated);
   return findIntegerAnswer(generated);
+}
+
+export function extractAnswer(tc: ReasoningCase, generated: string): string {
+  return extractAnswerDetailed(tc, generated).got;
 }
 
 export function answerMatches(tc: ReasoningCase, got: string): boolean {

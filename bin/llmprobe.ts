@@ -984,19 +984,24 @@ async function probeModel(
           );
         },
       });
-    } catch (err) {
-      if (err instanceof BudgetExceededError) {
-        budgetHit = true;
-        log(`${c.yellow("⚠")} ${err.message}`);
-      } else if (err instanceof TargetUnreachableError) {
-        incomplete = err.message;
-        log(`${c.red("✗")} ${err.message}`);
-        log(`  ${c.gray("eval discarded — the target stopped answering.")}`);
-      } else {
-        log(
-          `${c.yellow("⚠")} eval failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      if (reasoning.aborted) {
+        if (reasoning.aborted.reason === "budget") {
+          budgetHit = true;
+          log(`${c.yellow("⚠")} ${reasoning.aborted.message}`);
+        } else {
+          incomplete = reasoning.aborted.message;
+          log(`${c.red("✗")} ${reasoning.aborted.message}`);
+        }
+        if (reasoning.cases.length === 0) reasoning = undefined;
+        else
+          log(
+            `  ${c.gray(`keeping the ${reasoning.cases.length} answered questions`)}`,
+          );
       }
+    } catch (err) {
+      log(
+        `${c.yellow("⚠")} eval failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const spent =
       client.usage.inputTokens -

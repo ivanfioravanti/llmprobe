@@ -58,6 +58,51 @@ describe("runReasoning against the mock", () => {
   });
 });
 
+describe("runReasoning partial results", () => {
+  test("keeps completed cases when the budget dies mid-run", async () => {
+    engine = await startMockEngine();
+    const config: RunConfig = {
+      baseUrl: `${normalizeRoot(engine.url)}/v1`,
+      apiKey: "",
+      model: "mock-model-12b",
+      timeoutMs: 15_000,
+      depth: "default",
+      reasoningHeadroom: 0,
+      budgetTokens: 1,
+    };
+    const ctx = createContext({
+      config,
+      client: new EngineClient(config),
+      adapters: new Map<string, SurfaceAdapter>(ADAPTERS.map((a) => [a.id, a])),
+      present: new Set(["chat"]),
+      evalSurface: "chat",
+    });
+
+    const report = await runReasoning(ctx, {
+      maxTokens: 64,
+      temperature: 0,
+      sequence: "1,2",
+    });
+
+    expect(report.total).toBe(1);
+    expect(report.aborted?.reason).toBe("budget");
+    expect(report.scopeNote).toMatch(/1 of 2/);
+  });
+});
+
+describe("case deck", () => {
+  test("COMPSEC is spread through the deck, not parked at the tail", () => {
+    const total = REASONING_CASES.length;
+    const share =
+      REASONING_CASES.filter((c) => c.source === "COMPSEC").length / total;
+    let seen = 0;
+    REASONING_CASES.forEach((c, i) => {
+      if (c.source === "COMPSEC") seen++;
+      expect(Math.abs(seen - (i + 1) * share)).toBeLessThanOrEqual(1);
+    });
+  });
+});
+
 describe("selectCases", () => {
   test("limit and sequence", () => {
     expect(selectCases(REASONING_CASES, { limit: 2 })).toHaveLength(2);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { extractAnswer, answerMatches } from "./grade";
+import { extractAnswer, extractAnswerDetailed, answerMatches } from "./grade";
 import type { ReasoningCase } from "./types";
 
 const mc = (answer: string, n = 10): ReasoningCase => ({
@@ -137,5 +137,43 @@ describe("reasoning grader", () => {
     expect(extractAnswer(mc("A"), "")).toBe("?");
     expect(extractAnswer(int("5"), "no digits here")).toBe("?");
     expect(answerMatches(int("5"), "?")).toBe(false);
+  });
+
+  test("plural 'answers' is not an answer marker", () => {
+    expect(
+      extractAnswer(
+        mc("D"),
+        "Wrong answers include B. The correct choice is D",
+      ),
+    ).toBe("D");
+  });
+
+  test("marker answers are anchored, trailing fallbacks are not", () => {
+    const anchored = (tc: ReasoningCase, text: string) =>
+      extractAnswerDetailed(tc, text);
+    expect(anchored(mc("C"), "Answer: C")).toEqual({
+      got: "C",
+      anchored: true,
+    });
+    expect(anchored(mc("C"), "probably C")).toEqual({
+      got: "C",
+      anchored: false,
+    });
+    expect(anchored(int("42"), "Answer: 42")).toEqual({
+      got: "42",
+      anchored: true,
+    });
+    expect(anchored(int("42"), "we get 42")).toEqual({
+      got: "42",
+      anchored: false,
+    });
+    expect(anchored(cs("3"), "Answer: line 3")).toEqual({
+      got: "3",
+      anchored: true,
+    });
+    expect(anchored(cs("3"), "the bug is at 3")).toEqual({
+      got: "3",
+      anchored: false,
+    });
   });
 });
