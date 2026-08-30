@@ -1,6 +1,7 @@
 import type { JsonReport, ReportRunScope } from "../json";
 import { normalizeJsonReport } from "../json";
 import { benchSection } from "./bench";
+import { reasoningCard, reasoningSection } from "./reasoning";
 import { CARD_STYLE } from "./style.css";
 import { THEME_BOOT, THEME_SCRIPT, themeSwitcherHtml } from "./theme";
 import { REPORT_SCRIPT } from "./report-script";
@@ -419,6 +420,7 @@ export function renderCardHtml(
     ran("conformance") ? conformanceCard : "",
     ran("capability") ? capabilityCard : "",
     performanceCard,
+    report.reasoning ? reasoningCard(report.reasoning) : "",
   ].filter(Boolean);
 
   const outcomeHonesty = `<div class="outcome-lines">
@@ -565,6 +567,9 @@ export function renderCardHtml(
     : "";
 
   const performanceSection = bench ? benchSection(bench) : "";
+  const reasoningSectionHtml = report.reasoning
+    ? reasoningSection(report.reasoning)
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -585,6 +590,7 @@ export function renderCardHtml(
         ${engine ? `<span>${esc(engine)}</span>` : ""}
         ${baseUrl ? `<span>${esc(baseUrl)}</span>` : ""}
         ${report.run?.mode === "bench-only" ? `<span class="badge">benchmark only</span>` : ""}
+        ${report.run?.mode === "eval-only" ? `<span class="badge">eval only</span>` : ""}
         ${report.run?.depth && report.run.depth !== "default" ? `<span class="badge">--${esc(report.run.depth)}</span>` : ""}
       </div>
       ${scopeNote}
@@ -624,6 +630,7 @@ export function renderCardHtml(
     ${agenticSection}
     ${fidelitySection}
     ${performanceSection}
+    ${reasoningSectionHtml}
   </div>
 
   <footer class="page">

@@ -1,4 +1,5 @@
 import { STEP_SPECULATION_FLOOR } from "../../bench/stats";
+import type { ReasoningReport } from "../../reasoning/types";
 import type {
   AgenticScore,
   BenchReport,
@@ -322,6 +323,34 @@ function rungSpeculation(spec: ContextSpeculative | null, c: Palette): string {
   return `  ${bits.join(c.gray(" · "))}${why}`;
 }
 
+function renderReasoning(r: ReasoningReport, c: Palette): string[] {
+  const pct = r.total > 0 ? Math.round((100 * r.passed) / r.total) : 0;
+  const lines = [
+    c.bold("REASONING"),
+    `  ${c.gray(`informational — not scored; ${r.maxTokens} tokens per question, temperature ${r.temperature}`)}`,
+  ];
+  if (r.scopeNote) lines.push(`  ${c.yellow(`⚠ ${r.scopeNote}`)}`);
+  lines.push(
+    `  ${"Accuracy".padEnd(22)}${c.bold(`${r.passed}/${r.total}`)} ${c.gray(`(${pct}%)`)}` +
+      (r.stopped ? c.gray(`  · ${r.stopped} ran out of tokens`) : "") +
+      (r.error ? c.red(`  · ${r.error} errored`) : ""),
+  );
+  for (const s of r.bySource) {
+    lines.push(
+      `  ${s.source.padEnd(22)}${`${s.passed}/${s.total}`.padEnd(8)}` +
+        c.gray(
+          [
+            s.stopped ? `${s.stopped} stopped` : "",
+            s.error ? `${s.error} error` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+    );
+  }
+  return lines;
+}
+
 function renderBench(bench: BenchReport, c: Palette): string[] {
   const machine = [
     bench.machine.cpu,
@@ -544,6 +573,10 @@ export function renderReport(
 
   if (report.bench) {
     lines.push(...renderBench(report.bench, c), "");
+  }
+
+  if (report.reasoning) {
+    lines.push(...renderReasoning(report.reasoning, c), "");
   }
 
   const footer: string[] = [];

@@ -197,7 +197,8 @@ export class EngineClient {
     options: {
       body?: unknown;
       headers?: Record<string, string>;
-      timeoutMs?: number;
+      /** `null` waits indefinitely, like streamTimed. */
+      timeoutMs?: number | null;
     } = {},
   ): Promise<HttpResult> {
     this.assertBudget();
@@ -224,7 +225,10 @@ export class EngineClient {
             : isForm
               ? (options.body as FormData)
               : JSON.stringify(options.body),
-        signal: AbortSignal.timeout(options.timeoutMs ?? this.config.timeoutMs),
+        signal:
+          options.timeoutMs === null
+            ? undefined
+            : AbortSignal.timeout(options.timeoutMs ?? this.config.timeoutMs),
       }),
     );
     const durationMs = Date.now() - start;

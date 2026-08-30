@@ -333,7 +333,10 @@ function respondTo(body: any, defects: MockDefects) {
   const stop: string[] =
     typeof body.stop === "string" ? [body.stop] : (body.stop ?? []);
   let content = "Paris";
-  if (/repeat this text exactly/i.test(text)) {
+  if (/^Answer: <(letter|integer|line)/m.test(text)) {
+    // Reasoning eval: a fixed pick, so the grader has something to grade.
+    content = /Choices:/.test(text) ? "Answer: B" : "Answer: 0";
+  } else if (/repeat this text exactly/i.test(text)) {
     content = text.split(":").slice(1).join(":").trim();
   } else if (/alpha beta gamma/i.test(text)) {
     content = "alpha beta gamma";

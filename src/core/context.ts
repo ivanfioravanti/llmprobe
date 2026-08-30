@@ -41,7 +41,11 @@ export interface RunContext {
    */
   evalSurface: string | null;
 
-  send(surface: string, request: ChatRequest): Promise<SendResult>;
+  send(
+    surface: string,
+    request: ChatRequest,
+    options?: { timeoutMs?: number | null },
+  ): Promise<SendResult>;
   sendStream(surface: string, request: ChatRequest): Promise<SendStreamResult>;
   /** POST an arbitrary body to a surface — for malformed-request probes. */
   raw(
@@ -149,13 +153,16 @@ export function createContext(options: {
     present,
     evalSurface,
 
-    async send(surface, request) {
+    async send(surface, request, options = {}) {
       const adapter = adapterFor(surface);
       const body = adapter.buildBody(withHeadroom(request), config);
 
       const result = await client.request("POST", adapter.path, {
         body,
         headers: adapter.headers(config),
+        ...(options.timeoutMs !== undefined
+          ? { timeoutMs: options.timeoutMs }
+          : {}),
       });
 
       const reply = adapter.parse(result.json);

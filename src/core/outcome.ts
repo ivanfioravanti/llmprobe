@@ -1,3 +1,5 @@
+import type { ReasoningReport } from "../reasoning/types";
+
 /**
  * Core result vocabulary for llmprobe.
  *
@@ -611,6 +613,8 @@ export interface RunReport {
   /** Engine-fidelity card; present unless the run was `--quick`. */
   fidelity?: FidelityScore;
   bench?: BenchReport;
+  /** Reasoning accuracy; present only when --eval ran. Informational, never scored. */
+  reasoning?: ReasoningReport;
   usage?: UsageTotals;
   durationMs: number;
 }

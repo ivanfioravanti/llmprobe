@@ -167,6 +167,22 @@ This is deliberately a measurement rather than an OS thermal reading. `ProcessIn
 
 Two honesty guardrails: the report states it's **hardware-dependent** (cross-engine comparison only holds on the same machine), and on a reasoning model it flags that the "repeat this" task still triggers a novel thinking phase, so the ratio **understates** real speculative gains rather than silently misreporting them.
 
+## Reasoning eval (`--eval`)
+
+Off by default and never scored. 92 fixed questions: 25 GPQA Diamond, 25 SuperGPQA, 25 AIME 2025 and 17 COMPSEC (single-function C/C++ vulnerability localization). The model gets the question, a strict `Answer: <letter|integer|line numbers>` format instruction, and up to `--eval-max-tokens` (16000) to think. The grader reads the last `Answer:` line, with fallbacks for bold markers, "the answer is F", `m+n = 256+37 = 293` and "not B, so D". A question that hits the token cap without an answer line counts as _out of tokens_, reported apart from wrong: that is a budget fact, not a wrong answer.
+
+```
+llmprobe localhost:8080 --eval
+llmprobe localhost:8080 --eval-only --eval-questions 10
+llmprobe localhost:8080 --eval-only --eval-cases 1,5,9
+```
+
+`--eval-only` skips everything but surface discovery and the eval. `--eval-questions n` takes the first n, `--eval-cases` takes 1-based numbers or case ids; either one is noted on the report since a 10-question run is not comparable to a full one. `--sampling` applies here too; the default is greedy. Every question's extracted answer and visible text is kept in the saved JSON, so a run can be regraded offline.
+
+This is the one intelligence benchmark in llmprobe, and it is small on purpose: it is a regression harness for "did this engine or quant make the model dumber", not a leaderboard. On a thinking model it is also by far the most expensive thing here.
+
+Ported from ds4-eval. GPQA is CC BY 4.0, SuperGPQA is ODC-BY, the AIME 2025 mirror is MIT; see `NOTICE`.
+
 ## Run depths
 
 |             | What runs                                                   | Use it for                         |
@@ -176,6 +192,7 @@ Two honesty guardrails: the report states it's **hardware-dependent** (cross-eng
 | `--full`    | Everything, incl. long-context, concurrency, prompt caching | Release gating                     |
 | `--rungs`   | Only these context-ladder sizes (e.g. `32k,64k`)            | Chasing one cliff                  |
 | `--runs`    | Measured runs per scenario after the warmup (default 3)     | Quicker or steadier benchmarks     |
+| `--eval`    | Reasoning accuracy on 92 hard questions (informational)     | Did the quant make it dumber?      |
 
 Surface discovery is free: it probes with empty-body POSTs, which every engine rejects at validation long before inference. Mapping the whole surface costs zero tokens even against a paid endpoint. For the rest, `--budget <tokens>` sets a hard ceiling.
 

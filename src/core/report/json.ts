@@ -16,7 +16,7 @@ export type ReportPhase =
 
 export interface ReportRunScope {
   depth: "quick" | "default" | "full";
-  mode: "probe" | "bench-only";
+  mode: "probe" | "bench-only" | "eval-only";
   startedAt: string;
   phases: Record<
     | "coverage"
@@ -26,7 +26,10 @@ export interface ReportRunScope {
     | "fidelity"
     | "performance",
     { status: ReportPhase; reason?: string }
-  >;
+  > & {
+    /** Added with --eval; older reports lack it. */
+    reasoning?: { status: ReportPhase; reason?: string };
+  };
   budget?: { limitTokens?: number; exhausted: boolean };
 }
 
@@ -101,6 +104,8 @@ export interface JsonReport {
   fidelity?: RunReport["fidelity"];
   /** Informational performance numbers; present only when --bench ran. */
   bench?: RunReport["bench"];
+  /** Reasoning accuracy; present only when --eval ran. */
+  reasoning?: RunReport["reasoning"];
   usage?: RunReport["usage"];
   durationMs: number;
 }
@@ -190,6 +195,7 @@ export function buildJsonReport(
     agentic: report.agentic,
     fidelity: report.fidelity,
     bench: report.bench,
+    reasoning: report.reasoning,
     usage: report.usage,
     durationMs: report.durationMs,
   };
@@ -244,6 +250,7 @@ export function normalizeJsonReport(input: JsonReport): JsonReport {
           hasBench ? "measured" : "not-run",
           hasBench ? undefined : "benchmark not run",
         ),
+        reasoning: phase("not-run", "not present in v1 report"),
       },
     },
   };

@@ -70,6 +70,7 @@ import {
 import { runAgentic } from "../src/agentic/index";
 import { SAMPLING_PRESETS, parseRungs, runBenchmark } from "../src/bench/index";
 import { runFidelity } from "../src/fidelity/index";
+import { runReasoning } from "../src/reasoning/index";
 import { ALL_EVALS } from "../src/evals/index";
 
 interface Args {
@@ -85,6 +86,16 @@ interface Args {
   benchOnly: boolean;
   /** Named --sampling preset for --bench; absent means greedy (temperature 0). */
   sampling?: string;
+  /** Reasoning accuracy eval (GPQA / SuperGPQA / AIME / COMPSEC subsets); opt-in. */
+  eval: boolean;
+  /** Run the reasoning eval and nothing else. */
+  evalOnly: boolean;
+  /** First N questions only. */
+  evalQuestions?: number;
+  /** Comma list of 1-based question numbers or ids. */
+  evalCases?: string;
+  /** Generation cap per question (default 16000). */
+  evalMaxTokens: number;
   /** --rungs: context-ladder sizes to run instead of the depth's ladder. */
   rungs?: number[];
   /** --runs: measured runs per scenario and rung (after the warmup). */
@@ -117,6 +128,9 @@ function parseArgs(argv: string[]): Args {
     markdown: false,
     bench: true,
     benchOnly: false,
+    eval: false,
+    evalOnly: false,
+    evalMaxTokens: 16000,
     timeoutSec: 60,
     noSave: false,
     libraryDefault: false,
@@ -185,6 +199,31 @@ function parseArgs(argv: string[]): Args {
       case "--bench-only":
         args.bench = true;
         args.benchOnly = true;
+        break;
+      case "--eval":
+        args.eval = true;
+        break;
+      case "--eval-only":
+        args.eval = true;
+        args.evalOnly = true;
+        args.bench = false;
+        break;
+      case "--eval-questions":
+        args.evalQuestions = Number(value());
+        if (!Number.isInteger(args.evalQuestions) || args.evalQuestions < 1) {
+          console.error("--eval-questions needs a positive integer");
+          process.exit(1);
+        }
+        break;
+      case "--eval-cases":
+        args.evalCases = value();
+        break;
+      case "--eval-max-tokens":
+        args.evalMaxTokens = Number(value());
+        if (!Number.isInteger(args.evalMaxTokens) || args.evalMaxTokens < 1) {
+          console.error("--eval-max-tokens needs a positive integer");
+          process.exit(1);
+        }
         break;
       case "--sampling": {
         const preset = value();
@@ -281,7 +320,7 @@ function parseArgs(argv: string[]): Args {
  */
 const SLOW_TEST_MS = 3_000;
 
-/** Control-flow marker for --bench-only: leave the scored phases unrun. */
+/** Control-flow marker for --bench-only / --eval-only: leave the scored phases unrun. */
 class SkipToBench extends Error {}
 
 /** 16384 → "16.4k". Matches how the report's context table reads. */
@@ -319,7 +358,15 @@ Options:
                         On by default; --no-bench skips it
       --bench-only      Run only the benchmark — no conformance, evals, agentic
                         or fidelity. Surface discovery still runs; it is free.
-      --sampling <p>    Sampling preset for benchmark requests, to check the
+      --eval            Reasoning accuracy: 92 questions from GPQA Diamond,
+                        SuperGPQA, AIME 2025 and COMPSEC (informational, never
+                        scored). Expensive on a thinking model: up to
+                        --eval-max-tokens per question
+      --eval-only       Run only the reasoning eval (surface discovery still runs)
+      --eval-questions <n>  First n questions only
+      --eval-cases <list>   Only these questions, 1-based numbers or ids (e.g. 1,5,9)
+      --eval-max-tokens <n> Generation cap per question (default: 16000)
+      --sampling <p>    Sampling preset for benchmark and eval requests, to check the
                         engine off the greedy path. Not comparable to greedy
                         runs; the report says so. One of:
                           precise    t=0.2, top_p 0.9
@@ -344,7 +391,7 @@ Options:
                         instead of probing. Pick models per column;
                         sticky freeze header while scrolling.
       --budget <n>      Hard ceiling on total tokens (paid endpoints)
-      --timeout <sec>   Per-request timeout (default: 60; --bench requests are
+      --timeout <sec>   Per-request timeout (default: 60; --bench and --eval requests are
                         never timed out — a cold prefill takes what it takes)
       --no-color        Disable ANSI colour
   -v, --version         Print the llmprobe version
@@ -593,12 +640,14 @@ async function probeModel(
   let budgetHit = false;
   /** Set when the target stopped answering — everything after it is partial. */
   let incomplete: string | null = null;
+  const onlyMode = args.benchOnly || args.evalOnly;
+  const onlyReason = args.evalOnly ? "eval-only run" : "benchmark-only run";
 
   // --bench-only skips straight to the benchmark. Surface discovery above
   // already ran, because it costs nothing and the benchmark needs to know which
   // chat-shaped surface to measure through.
   try {
-    if (args.benchOnly) throw new SkipToBench();
+    if (onlyMode) throw new SkipToBench();
     const run = await runConformance(
       buildConformanceTests(present),
       ctx,
@@ -674,7 +723,7 @@ async function probeModel(
     }
   } catch (err) {
     if (err instanceof SkipToBench) {
-      // nothing to do — the phases below are all gated on benchOnly too
+      // nothing to do — the phases below are all gated on onlyMode too
     } else if (err instanceof TargetUnreachableError) {
       incomplete = err.message;
       log(`\n${c.red("✗")} ${err.message}`);
@@ -696,7 +745,7 @@ async function probeModel(
   if (
     !budgetHit &&
     !incomplete &&
-    !args.benchOnly &&
+    !onlyMode &&
     args.depth !== "quick" &&
     ctx.evalSurface
   ) {
@@ -747,7 +796,7 @@ async function probeModel(
   if (
     !budgetHit &&
     !incomplete &&
-    !args.benchOnly &&
+    !onlyMode &&
     args.depth !== "quick" &&
     ctx.evalSurface
   ) {
@@ -892,6 +941,69 @@ async function probeModel(
     );
   }
 
+  // ── 4e. Reasoning eval (opt-in) — informational, never scored ───────────
+
+  let reasoning: RunReport["reasoning"];
+  if (args.eval && !budgetHit && !incomplete && ctx.evalSurface) {
+    log();
+    log(
+      `${c.gray(`reasoning eval (up to ${fmtCount(args.evalMaxTokens)} tokens per question)...`)}`,
+    );
+    const evalStart = {
+      input: client.usage.inputTokens,
+      output: client.usage.outputTokens,
+    };
+    const sampling = args.sampling
+      ? SAMPLING_PRESETS[args.sampling]
+      : undefined;
+    try {
+      reasoning = await runReasoning(ctx, {
+        maxTokens: args.evalMaxTokens,
+        temperature: sampling?.temperature ?? 0,
+        ...(sampling?.topP !== undefined ? { topP: sampling.topP } : {}),
+        ...(args.evalQuestions !== undefined
+          ? { limit: args.evalQuestions }
+          : {}),
+        ...(args.evalCases !== undefined ? { sequence: args.evalCases } : {}),
+        onCase: (r, i, total) => {
+          const icon =
+            r.status === "passed"
+              ? c.green("✓")
+              : r.status === "stopped"
+                ? c.yellow("…")
+                : c.red("✗");
+          const tail =
+            r.status === "passed"
+              ? ""
+              : r.status === "error"
+                ? c.gray(` ${r.error ?? ""}`)
+                : c.gray(` got ${r.got}, expected ${r.expected}`);
+          log(
+            `  ${icon} ${c.gray(`${String(i + 1).padStart(3)}/${total}`)} ${r.source} · ${r.title}${tail}`,
+          );
+        },
+      });
+    } catch (err) {
+      if (err instanceof BudgetExceededError) {
+        budgetHit = true;
+        log(`${c.yellow("⚠")} ${err.message}`);
+      } else if (err instanceof TargetUnreachableError) {
+        incomplete = err.message;
+        log(`${c.red("✗")} ${err.message}`);
+        log(`  ${c.gray("eval discarded — the target stopped answering.")}`);
+      } else {
+        log(
+          `${c.yellow("⚠")} eval failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const spent =
+      client.usage.inputTokens -
+      evalStart.input +
+      (client.usage.outputTokens - evalStart.output);
+    log(`  ${c.gray(`eval used ${fmtCount(spent)} tokens`)}`);
+  }
+
   // ── 5. Score and report ─────────────────────────────────────────────────
 
   const entries = buildCoverageEntries(
@@ -901,7 +1013,7 @@ async function probeModel(
     // --bench-only never ran a conformance test, so nothing was learned about
     // any feature. Left empty, every one of them would print as "not detected"
     // — a wall of red for checks nobody asked to run.
-    args.benchOnly ? new Set(FEATURES.map((f) => f.id)) : unprobed,
+    onlyMode ? new Set(FEATURES.map((f) => f.id)) : unprobed,
   );
 
   const report: RunReport = {
@@ -913,6 +1025,7 @@ async function probeModel(
     agentic,
     fidelity,
     bench,
+    reasoning,
     usage: { ...client.usage },
     durationMs: Date.now() - startedAt,
   };
@@ -923,7 +1036,7 @@ async function probeModel(
   ): { status: ReportPhase; reason?: string } => ({ status, reason });
   const runScope: ReportRunScope = {
     depth: args.depth,
-    mode: args.benchOnly ? "bench-only" : "probe",
+    mode: args.evalOnly ? "eval-only" : args.benchOnly ? "bench-only" : "probe",
     startedAt: new Date(startedAt).toISOString(),
     phases: {
       coverage: phase(
@@ -933,7 +1046,7 @@ async function probeModel(
           : undefined,
       ),
       conformance: phase(
-        args.benchOnly
+        onlyMode
           ? "not-run"
           : budgetHit
             ? "interrupted"
@@ -942,8 +1055,8 @@ async function probeModel(
               : conformanceResults.length > 0
                 ? "measured"
                 : "unavailable",
-        args.benchOnly
-          ? "benchmark-only run"
+        onlyMode
+          ? onlyReason
           : budgetHit
             ? "token budget exhausted"
             : args.depth === "quick"
@@ -953,15 +1066,15 @@ async function probeModel(
                 : "no conformance results",
       ),
       capability: phase(
-        args.benchOnly || args.depth === "quick"
+        onlyMode || args.depth === "quick"
           ? "not-run"
           : budgetHit
             ? "interrupted"
             : evalResults.length > 0
               ? "measured"
               : "unavailable",
-        args.benchOnly
-          ? "benchmark-only run"
+        onlyMode
+          ? onlyReason
           : args.depth === "quick"
             ? "quick depth omits capability evals"
             : budgetHit
@@ -973,7 +1086,7 @@ async function probeModel(
       agentic: phase(
         agentic
           ? "measured"
-          : args.benchOnly || args.depth === "quick"
+          : onlyMode || args.depth === "quick"
             ? "not-run"
             : budgetHit
               ? "interrupted"
@@ -983,8 +1096,8 @@ async function probeModel(
                 : "failed",
         agentic
           ? undefined
-          : args.benchOnly
-            ? "benchmark-only run"
+          : onlyMode
+            ? onlyReason
             : args.depth === "quick"
               ? "quick depth omits agentic tasks"
               : budgetHit
@@ -998,7 +1111,7 @@ async function probeModel(
       fidelity: phase(
         fidelity
           ? "measured"
-          : args.benchOnly || args.depth === "quick"
+          : onlyMode || args.depth === "quick"
             ? "not-run"
             : budgetHit
               ? "interrupted"
@@ -1007,8 +1120,8 @@ async function probeModel(
                 : "failed",
         fidelity
           ? undefined
-          : args.benchOnly
-            ? "benchmark-only run"
+          : onlyMode
+            ? onlyReason
             : args.depth === "quick"
               ? "quick depth omits fidelity"
               : budgetHit
@@ -1036,6 +1149,26 @@ async function probeModel(
               : !ctx.evalSurface
                 ? "no chat-shaped evaluation surface"
                 : "benchmark did not produce a report",
+      ),
+      reasoning: phase(
+        reasoning
+          ? "measured"
+          : !args.eval
+            ? "not-run"
+            : budgetHit
+              ? "interrupted"
+              : !ctx.evalSurface
+                ? "unavailable"
+                : "failed",
+        reasoning
+          ? undefined
+          : !args.eval
+            ? "eval not requested"
+            : budgetHit
+              ? "token budget exhausted"
+              : !ctx.evalSurface
+                ? "no chat-shaped evaluation surface"
+                : "eval did not produce a report",
       ),
     },
     budget: { limitTokens: args.budget, exhausted: budgetHit },
@@ -1131,7 +1264,7 @@ async function probeModel(
   } else {
     console.log();
     console.log(
-      renderReport(report, { color: !args.noColor, benchOnly: args.benchOnly }),
+      renderReport(report, { color: !args.noColor, benchOnly: onlyMode }),
     );
   }
 
