@@ -364,7 +364,8 @@ Options:
                         --eval-max-tokens per question
       --eval-only       Run only the reasoning eval (surface discovery still runs)
       --eval-questions <n>  First n questions only
-      --eval-cases <list>   Only these questions, 1-based numbers or ids (e.g. 1,5,9)
+      --eval-cases <list>   Only these questions: 1-based numbers, ids, or a source
+                        (gpqa, supergpqa, aime, compsec), e.g. 1,5,9 or aime
       --eval-max-tokens <n> Generation cap per question (default: 16000)
       --sampling <p>    Sampling preset for benchmark and eval requests, to check the
                         engine off the greedy path. Not comparable to greedy

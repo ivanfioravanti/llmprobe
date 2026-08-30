@@ -37,15 +37,26 @@ export function buildPrompt(tc: ReasoningCase): string {
   return `${tc.question}\n\nSolve the problem. ${TAIL}Answer: <integer>`;
 }
 
-/** "1,5,9" (1-based) or case ids, in the order given. */
+const SOURCE_ALIASES: Record<string, string[]> = {
+  gpqa: ["GPQA Diamond", "GPQA Diamond (modified)"],
+  gpqadiamond: ["GPQA Diamond", "GPQA Diamond (modified)"],
+  aime2025: ["AIME2025"],
+  supergpqa: ["SuperGPQA"],
+  aime: ["AIME2025"],
+  compsec: ["COMPSEC"],
+};
+
+/** "1,5,9" (1-based), case ids, or sources (gpqa, supergpqa, aime, compsec), in the order given. */
 export function selectCases(
   all: ReasoningCase[],
   opts: { limit?: number; sequence?: string },
 ): ReasoningCase[] {
   let picked = all;
   if (opts.sequence) {
-    picked = opts.sequence.split(",").map((raw) => {
+    picked = opts.sequence.split(",").flatMap((raw) => {
       const s = raw.trim();
+      const sources = SOURCE_ALIASES[s.toLowerCase().replace(/[^a-z]/g, "")];
+      if (sources) return all.filter((c) => sources.includes(c.source));
       const n = Number(s);
       const tc =
         Number.isInteger(n) && n >= 1 && n <= all.length
@@ -53,10 +64,10 @@ export function selectCases(
           : all.find((c) => c.id === s);
       if (!tc) {
         throw new Error(
-          `--eval-cases: unknown case '${s}' (1..${all.length} or a case id)`,
+          `--eval-cases: unknown case '${s}' (1..${all.length}, a case id, or ${Object.keys(SOURCE_ALIASES).join("/")})`,
         );
       }
-      return tc;
+      return [tc];
     });
   }
   if (opts.limit !== undefined && opts.limit > 0)

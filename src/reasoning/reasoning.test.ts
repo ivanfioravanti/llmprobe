@@ -64,6 +64,14 @@ describe("selectCases", () => {
     expect(
       selectCases(REASONING_CASES, { sequence: "3,1" }).map((c) => c.id),
     ).toEqual([REASONING_CASES[2]!.id, REASONING_CASES[0]!.id]);
+    expect(
+      selectCases(REASONING_CASES, { sequence: "aime" }).every(
+        (c) => c.source === "AIME2025",
+      ),
+    ).toBe(true);
+    expect(
+      selectCases(REASONING_CASES, { sequence: "GPQA Diamond" }),
+    ).toHaveLength(25);
     expect(() => selectCases(REASONING_CASES, { sequence: "999" })).toThrow();
   });
 });
