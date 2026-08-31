@@ -1,5 +1,6 @@
-import { parseSSEFrames, type SSEFrame } from "./sse";
+import { Agent, type BodyInit, fetch as undiciFetch } from "undici";
 
+import { parseSSEFrames, type SSEFrame } from "./sse";
 export interface RunConfig {
   /** Effective root, already resolved by the probe (e.g. http://host:8080/v1). */
   baseUrl: string;
@@ -63,11 +64,38 @@ export class TargetUnreachableError extends Error {
     cause: unknown,
   ) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`target unreachable at ${path}: ${detail}`);
+    // "fetch failed" names nothing; the errno inside the cause chain is the
+    // whole story (ECONNRESET is a dropped socket, EHOSTUNREACH a routing or
+    // local-network block, UND_ERR_HEADERS_TIMEOUT a hidden fetch deadline)
+    // — so it rides in the message, undici's AggregateError nests included.
+    const codes = new Set<string>();
+    for (const e of causeChain(cause)) {
+      const code = (e as { code?: unknown }).code;
+      if (typeof code === "string") codes.add(code);
+      const nested = (e as { errors?: unknown }).errors;
+      if (Array.isArray(nested)) {
+        for (const sub of nested) {
+          const subCode = (sub as { code?: unknown } | null)?.code;
+          if (typeof subCode === "string") codes.add(subCode);
+        }
+      }
+    }
+    const why = codes.size > 0 ? ` (${[...codes].join(", ")})` : "";
+    super(`target unreachable at ${path}: ${detail}${why}`);
     this.name = "TargetUnreachableError";
     this.cause = cause;
   }
 }
+
+/**
+ * Node's fetch carries built-in 300-second headers/body clocks that fire even
+ * when the caller passes no deadline — a thinking model that spends over five
+ * minutes on a non-streaming request dies as "fetch failed" and reads as a
+ * dead target. This dispatcher disables both hidden clocks; the only deadline
+ * left is the AbortSignal each caller chooses (or none at all, when the call
+ * asks to wait indefinitely).
+ */
+const noDeadlineDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 const TRANSPORT_CODES = new Set([
   "ECONNREFUSED",
@@ -157,6 +185,14 @@ export interface TimedStreamResult {
 export class EngineClient {
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   requests = 0;
+  /**
+   * Output tokens promised to in-flight requests but not yet recorded. The
+   * budget check projects this on top of recorded usage so a request launched
+   * while others are still running cannot pass a check their unrecorded
+   * spending is about to fail. Only parallel callers hold reservations; a
+   * sequential run keeps pendingOutputTokens at zero and the check unchanged.
+   */
+  private pendingOutputTokens = 0;
 
   constructor(private readonly config: RunConfig) {}
 
@@ -164,10 +200,23 @@ export class EngineClient {
     return `${this.config.baseUrl.replace(/\/+$/, "")}${path}`;
   }
 
+  /** Hold `tokens` of output budget for an about-to-launch request. */
+  reserveOutput(tokens: number): void {
+    if (tokens > 0) this.pendingOutputTokens += tokens;
+  }
+
+  /** Release a reservation once real usage is recorded (or never will be). */
+  releaseOutput(tokens: number): void {
+    this.pendingOutputTokens = Math.max(0, this.pendingOutputTokens - tokens);
+  }
+
   private assertBudget(): void {
     const { budgetTokens } = this.config;
     if (budgetTokens === undefined) return;
-    const spent = this.usage.inputTokens + this.usage.outputTokens;
+    const spent =
+      this.usage.inputTokens +
+      this.usage.outputTokens +
+      this.pendingOutputTokens;
     if (spent >= budgetTokens)
       throw new BudgetExceededError(spent, budgetTokens);
   }
@@ -211,7 +260,8 @@ export class EngineClient {
 
     const start = Date.now();
     const response = await this.transport(path, () =>
-      fetch(this.url(path), {
+      undiciFetch(this.url(path), {
+        dispatcher: noDeadlineDispatcher,
         method,
         headers: {
           ...(method === "POST" && !isForm
@@ -223,7 +273,9 @@ export class EngineClient {
           options.body === undefined
             ? undefined
             : isForm
-              ? (options.body as FormData)
+              ? // Node's global FormData *is* undici's FormData at runtime;
+                // only the TS lib types disagree.
+                (options.body as FormData as BodyInit)
               : JSON.stringify(options.body),
         signal:
           options.timeoutMs === null
@@ -265,7 +317,8 @@ export class EngineClient {
 
     const start = Date.now();
     const response = await this.transport(path, () =>
-      fetch(this.url(path), {
+      undiciFetch(this.url(path), {
+        dispatcher: noDeadlineDispatcher,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -314,7 +367,8 @@ export class EngineClient {
 
     const startMs = Date.now();
     const response = await this.transport(path, () =>
-      fetch(this.url(path), {
+      undiciFetch(this.url(path), {
+        dispatcher: noDeadlineDispatcher,
         method: "POST",
         headers: {
           "Content-Type": "application/json",

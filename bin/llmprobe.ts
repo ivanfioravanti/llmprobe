@@ -96,6 +96,8 @@ interface Args {
   evalCases?: string;
   /** Generation cap per question (default 16000). */
   evalMaxTokens: number;
+  /** Questions / eval samples in flight at once (default 1 = sequential). */
+  concurrency?: number;
   /** --rungs: context-ladder sizes to run instead of the depth's ladder. */
   rungs?: number[];
   /** --runs: measured runs per scenario and rung (after the warmup). */
@@ -225,6 +227,15 @@ function parseArgs(argv: string[]): Args {
           process.exit(1);
         }
         break;
+      case "--concurrency": {
+        const n = numberValue();
+        if (!Number.isInteger(n) || n < 1) {
+          console.error(`--concurrency needs a positive integer, got ${n}`);
+          process.exit(1);
+        }
+        args.concurrency = n;
+        break;
+      }
       case "--sampling": {
         const preset = value();
         if (!(preset in SAMPLING_PRESETS)) {
@@ -367,6 +378,9 @@ Options:
       --eval-cases <list>   Only these questions: 1-based numbers, ids, or a source
                         (gpqa, supergpqa, aime, compsec), e.g. 1,5,9 or aime
       --eval-max-tokens <n> Generation cap per question (default: 16000)
+      --concurrency <n> Questions / eval samples in flight at once (default: 1).
+                        Speeds up --eval on engines that serve in parallel;
+                        benchmark timing always stays serial
       --sampling <p>    Sampling preset for benchmark and eval requests, to check the
                         engine off the greedy path. Not comparable to greedy
                         runs; the report says so. One of:
@@ -708,19 +722,27 @@ async function probeModel(
 
     if (!incomplete && args.depth !== "quick") {
       log();
-      evalResults = await runEvals(ALL_EVALS, ctx, featureSupport, (result) => {
-        if (result.outcome) return;
-        const passed = result.samples.filter((s) => s.passed).length;
-        const icon =
-          passed === result.samples.length
-            ? c.green("✓")
-            : passed === 0
-              ? c.red("✗")
-              : c.yellow("~");
-        log(
-          `  ${icon} ${result.name} ${c.gray(`${passed}/${result.samples.length}`)}`,
-        );
-      });
+      evalResults = await runEvals(
+        ALL_EVALS,
+        ctx,
+        featureSupport,
+        (result) => {
+          if (result.outcome) return;
+          const passed = result.samples.filter((s) => s.passed).length;
+          const icon =
+            passed === result.samples.length
+              ? c.green("✓")
+              : passed === 0
+                ? c.red("✗")
+                : c.yellow("~");
+          log(
+            `  ${icon} ${result.name} ${c.gray(`${passed}/${result.samples.length}`)}`,
+          );
+        },
+        args.concurrency !== undefined
+          ? { concurrency: args.concurrency }
+          : undefined,
+      );
     }
   } catch (err) {
     if (err instanceof SkipToBench) {
@@ -966,6 +988,9 @@ async function probeModel(
           ? { limit: args.evalQuestions }
           : {}),
         ...(args.evalCases !== undefined ? { sequence: args.evalCases } : {}),
+        ...(args.concurrency !== undefined
+          ? { concurrency: args.concurrency }
+          : {}),
         onCase: (r, i, total) => {
           const icon =
             r.status === "passed"

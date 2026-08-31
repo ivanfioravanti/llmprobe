@@ -1,4 +1,4 @@
-import { Asserter, Inconclusive, Unsupported } from "./assert";
+import { Asserter, Inconclusive, runConcurrent, Unsupported } from "./assert";
 import { BudgetExceededError, TargetUnreachableError } from "./client";
 import type { ConformanceTest, EvalDef, RunContext } from "./context";
 import type {
@@ -270,11 +270,17 @@ export async function runConformance(
   return { results, featureSupport, credits, unprobed, unreachable };
 }
 
+export interface RunEvalsOptions {
+  /** Samples of one eval in flight at once. 1 (default) is sequential. */
+  concurrency?: number;
+}
+
 export async function runEvals(
   evals: EvalDef[],
   ctx: RunContext,
   featureSupport: FeatureSupport,
   onProgress?: (result: EvalResult) => void,
+  opts?: RunEvalsOptions,
 ): Promise<EvalResult[]> {
   const results: EvalResult[] = [];
 
@@ -321,24 +327,42 @@ export async function runEvals(
     }
 
     const k = def.k ?? 1;
-    const samples: EvalSample[] = [];
-
-    for (let i = 0; i < k; i += 1) {
-      try {
-        samples.push(await def.run(ctx));
-      } catch (err) {
-        if (err instanceof BudgetExceededError) throw err;
-        // A dead target says nothing about the model. Grading it would print
-        // "below floor" for a model that was never asked anything.
-        if (err instanceof TargetUnreachableError) throw err;
-        // An engine error during an eval is a failed sample for the model's
-        // purposes; the engine's own card records the fault separately.
-        samples.push({
-          passed: false,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // Samples go through the pool even sequentially: one at a time, in
+    // order, with the same abort and grading semantics as a plain loop. An
+    // abort error stops new dispatch, in-flight samples settle, then the
+    // first abort error is rethrown exactly as the loop used to throw it.
+    let abortErr: unknown = null;
+    const settled = await runConcurrent<EvalSample | null>(
+      k,
+      opts?.concurrency ?? 1,
+      async () => {
+        try {
+          return await def.run(ctx);
+        } catch (err) {
+          if (
+            err instanceof BudgetExceededError ||
+            err instanceof TargetUnreachableError
+          ) {
+            abortErr ??= err;
+            return null;
+          }
+          // An engine error during an eval is a failed sample for the model's
+          // purposes; the engine's own card records the fault separately.
+          return {
+            passed: false,
+            message: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+      { shouldStop: () => abortErr !== null },
+    );
+    if (abortErr !== null) throw abortErr;
+    // A dead target says nothing about the model. Grading it would print
+    // "below floor" for a model that was never asked anything — that verdict
+    // belongs to the rethrown abort error above, not to these samples.
+    const samples: EvalSample[] = settled.filter(
+      (s): s is EvalSample => s !== null,
+    );
 
     emit({
       id: def.id,

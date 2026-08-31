@@ -176,7 +176,13 @@ function benchOnlyReport(): JsonReport {
     },
     budget: { exhausted: false },
   };
-  report.conformance = { pct: 0, passed: 0, total: 0, bySurface: [], results: [] };
+  report.conformance = {
+    pct: 0,
+    passed: 0,
+    total: 0,
+    bySurface: [],
+    results: [],
+  };
   report.capability = {
     pct: 0,
     verdict: "below-floor",
@@ -186,10 +192,20 @@ function benchOnlyReport(): JsonReport {
   };
   delete report.agentic;
   report.bench = {
-    decodeTokPerSec: { median: 82.4, min: 80, max: 85, samples: [80, 82.4, 85] },
+    decodeTokPerSec: {
+      median: 82.4,
+      min: 80,
+      max: 85,
+      samples: [80, 82.4, 85],
+    },
     streamCaveat: null,
     ttftMs: { median: 240, min: 220, max: 260, samples: [220, 240, 260] },
-    prefillTokPerSec: { median: 1900, min: 1800, max: 2000, samples: [1800, 1900, 2000] },
+    prefillTokPerSec: {
+      median: 1900,
+      min: 1800,
+      max: 2000,
+      samples: [1800, 1900, 2000],
+    },
     prefillPromptTokens: 4096,
     speculative: {
       predictableTokPerSec: 140,
@@ -223,7 +239,12 @@ function benchOnlyReport(): JsonReport {
       elapsedMs: 180_000,
       verdict: "steady",
     },
-    machine: { platform: "darwin", arch: "arm64", cpu: "Apple M3 Max", memGB: 64 },
+    machine: {
+      platform: "darwin",
+      arch: "arm64",
+      cpu: "Apple M3 Max",
+      memGB: 64,
+    },
     contextScaling: [
       {
         targetTokens: 512,
