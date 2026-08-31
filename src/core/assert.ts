@@ -200,11 +200,21 @@ export function buildHaystackWithNeedle(options: {
   }
 }
 
+export interface RunConcurrentOptions {
+  /**
+   * Checked before each new dispatch: once it returns true no further work
+   * starts, but every in-flight factory call still runs to completion and
+   * lands in the result array.
+   */
+  shouldStop?: () => boolean;
+}
+
 /** Run `factory(i)` for i in [0, n) at most `concurrency` at a time. */
 export async function runConcurrent<T>(
   n: number,
   concurrency: number,
   factory: (i: number) => Promise<T>,
+  opts?: RunConcurrentOptions,
 ): Promise<T[]> {
   const results: T[] = new Array(n);
   let next = 0;
@@ -212,6 +222,7 @@ export async function runConcurrent<T>(
 
   async function worker(): Promise<void> {
     for (;;) {
+      if (opts?.shouldStop?.()) return;
       const i = next++;
       if (i >= n) return;
       results[i] = await factory(i);

@@ -4,7 +4,15 @@ import { AddressInfo } from "node:net";
 import { describe, expect, test } from "vitest";
 import { Agent, fetch as undiciFetch } from "undici";
 
-import { isTransportFailure, TargetUnreachableError } from "./client";
+import {
+  BudgetExceededError,
+  EngineClient,
+  isTransportFailure,
+  type RunConfig,
+  TargetUnreachableError,
+} from "./client";
+import { normalizeRoot } from "./probe";
+import { startMockEngine } from "../fixtures/mock-engine";
 
 describe("isTransportFailure", () => {
   test("a refused connection is the target being gone", () => {
@@ -52,6 +60,45 @@ describe("TargetUnreachableError", () => {
     });
 
     expect(err.message).toContain("ECONNRESET");
+  });
+});
+
+describe("the budget reservation", () => {
+  test("an in-flight reservation projects the budget until released", async () => {
+    const engine = await startMockEngine();
+    try {
+      const config: RunConfig = {
+        baseUrl: `${normalizeRoot(engine.url)}/v1`,
+        apiKey: "",
+        model: "mock-model-12b",
+        timeoutMs: 5_000,
+        depth: "default",
+        reasoningHeadroom: 0,
+        budgetTokens: 10_000,
+      };
+      const client = new EngineClient(config);
+
+      // Three questions in flight, each holding its 4k generation cap: the
+      // projected spend crosses the budget, so the next send is refused
+      // before any socket opens — a parallel burst cannot spend past the
+      // budget on the strength of checks made before the others landed.
+      client.reserveOutput(4_000);
+      client.reserveOutput(4_000);
+      client.reserveOutput(4_000);
+      await expect(client.request("GET", "/models")).rejects.toBeInstanceOf(
+        BudgetExceededError,
+      );
+
+      // Their real usage landed; the reservations are gone and the same
+      // send goes through.
+      client.releaseOutput(4_000);
+      client.releaseOutput(4_000);
+      client.releaseOutput(4_000);
+      const ok = await client.request("GET", "/models");
+      expect(ok.status).toBe(200);
+    } finally {
+      engine.stop();
+    }
   });
 });
 

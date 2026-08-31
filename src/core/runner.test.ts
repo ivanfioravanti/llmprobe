@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { Inconclusive, Unsupported } from "./assert";
-import { TargetUnreachableError } from "./client";
+import { BudgetExceededError, TargetUnreachableError } from "./client";
 import type { ConformanceTest, EvalDef, RunContext } from "./context";
 import { SURFACES } from "./registry";
 import {
@@ -340,6 +340,62 @@ describe("runEvals", () => {
       false,
       false,
     ]);
+  });
+
+  test("parallel samples overlap but land in dispatch order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    let call = 0;
+    const results = await runEvals(
+      [
+        evalDef({
+          k: 3,
+          run: async () => {
+            const i = call++;
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            // The first-dispatched sample finishes last.
+            await new Promise((r) => setTimeout(r, i === 0 ? 40 : 5));
+            inFlight -= 1;
+            return { passed: i === 1 };
+          },
+        }),
+      ],
+      ctx(),
+      support({}),
+      undefined,
+      { concurrency: 3 },
+    );
+
+    expect(peak).toBe(3);
+    expect(results[0]!.samples.map((s) => s.passed)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  test("a parallel abort stops new dispatch and still propagates", async () => {
+    let calls = 0;
+    const evals = [
+      evalDef({
+        k: 4,
+        run: async () => {
+          calls += 1;
+          // Sample 0 hangs around long enough to be in flight when the
+          // budget dies on sample 1.
+          if (calls === 1) await new Promise((r) => setTimeout(r, 40));
+          if (calls === 2) throw new BudgetExceededError(100, 99);
+          return { passed: true };
+        },
+      }),
+    ];
+
+    await expect(
+      runEvals(evals, ctx(), support({}), undefined, { concurrency: 2 }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    // Samples 2 and 3 were never dispatched after the abort.
+    expect(calls).toBe(2);
   });
 
   test("an eval needing a feature the engine lacks is excluded, not failed", async () => {

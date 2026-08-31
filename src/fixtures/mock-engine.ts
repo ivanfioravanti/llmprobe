@@ -144,6 +144,12 @@ export interface MockEngine {
   requests: string[];
   /** Parsed body of every /chat/completions request, in arrival order. */
   chatBodies: Array<Record<string, unknown>>;
+  /**
+   * Highest number of /chat/completions requests answered at the same time.
+   * With every request stalled a second, a client that fans out sees its
+   * whole concurrency here; a sequential one never moves it past 1.
+   */
+  chatPeakInFlight: number;
 }
 
 const MODEL = "mock-model-12b";
@@ -530,6 +536,8 @@ export async function startMockEngine(
   const surfaces = defects.surfaces ?? ["models", "chat"];
   const requests: string[] = [];
   const chatBodies: Array<Record<string, unknown>> = [];
+  let chatInFlight = 0;
+  let chatPeakInFlight = 0;
   /** System prompts already prefilled once — the simulated prefix cache. */
   const seenSystems = new Set<string>();
 
@@ -567,6 +575,13 @@ export async function startMockEngine(
     }
 
     if (path === "/chat/completions" && surfaces.includes("chat")) {
+      // "close" fires on normal completion and on a destroyed socket alike,
+      // so the in-flight count stays balanced on every exit path.
+      chatInFlight += 1;
+      chatPeakInFlight = Math.max(chatPeakInFlight, chatInFlight);
+      res.on("close", () => {
+        chatInFlight -= 1;
+      });
       const body = (await readBodyJson(request)) as any;
       chatBodies.push(body);
 
@@ -773,5 +788,8 @@ export async function startMockEngine(
     },
     requests,
     chatBodies,
+    get chatPeakInFlight() {
+      return chatPeakInFlight;
+    },
   };
 }

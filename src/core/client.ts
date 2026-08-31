@@ -185,6 +185,14 @@ export interface TimedStreamResult {
 export class EngineClient {
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   requests = 0;
+  /**
+   * Output tokens promised to in-flight requests but not yet recorded. The
+   * budget check projects this on top of recorded usage so a request launched
+   * while others are still running cannot pass a check their unrecorded
+   * spending is about to fail. Only parallel callers hold reservations; a
+   * sequential run keeps pendingOutputTokens at zero and the check unchanged.
+   */
+  private pendingOutputTokens = 0;
 
   constructor(private readonly config: RunConfig) {}
 
@@ -192,10 +200,23 @@ export class EngineClient {
     return `${this.config.baseUrl.replace(/\/+$/, "")}${path}`;
   }
 
+  /** Hold `tokens` of output budget for an about-to-launch request. */
+  reserveOutput(tokens: number): void {
+    if (tokens > 0) this.pendingOutputTokens += tokens;
+  }
+
+  /** Release a reservation once real usage is recorded (or never will be). */
+  releaseOutput(tokens: number): void {
+    this.pendingOutputTokens = Math.max(0, this.pendingOutputTokens - tokens);
+  }
+
   private assertBudget(): void {
     const { budgetTokens } = this.config;
     if (budgetTokens === undefined) return;
-    const spent = this.usage.inputTokens + this.usage.outputTokens;
+    const spent =
+      this.usage.inputTokens +
+      this.usage.outputTokens +
+      this.pendingOutputTokens;
     if (spent >= budgetTokens)
       throw new BudgetExceededError(spent, budgetTokens);
   }

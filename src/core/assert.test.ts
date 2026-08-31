@@ -1,6 +1,44 @@
 import { describe, expect, test } from "vitest";
 
-import { detectReasoningLeak } from "./assert";
+import { detectReasoningLeak, runConcurrent } from "./assert";
+
+describe("runConcurrent", () => {
+  test("runs at most `concurrency` factories at once and keeps index order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const results = await runConcurrent(6, 2, async (i) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return i * 10;
+    });
+
+    expect(peak).toBe(2);
+    expect(results).toEqual([0, 10, 20, 30, 40, 50]);
+  });
+
+  test("shouldStop halts new dispatch but in-flight work finishes", async () => {
+    let stop = false;
+    const started: number[] = [];
+    const results = await runConcurrent(
+      4,
+      2,
+      async (i) => {
+        started.push(i);
+        await new Promise((r) => setTimeout(r, i === 0 ? 40 : 5));
+        if (i === 1) stop = true;
+        return i;
+      },
+      { shouldStop: () => stop },
+    );
+
+    // Indices 2 and 3 were never claimed once the flag was seen.
+    expect(started).toEqual([0, 1]);
+    expect(results[0]).toBe(0);
+    expect(results[1]).toBe(1);
+  });
+});
 
 describe("detectReasoningLeak", () => {
   test("a plain answer is not a leak", () => {
