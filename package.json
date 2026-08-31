@@ -34,7 +34,7 @@
   },
   "scripts": {
     "prettier": "prettier",
-    "build:cli": "esbuild bin/llmprobe.ts --bundle --platform=node --format=esm --target=node20 --outfile=bin/dist/llmprobe.mjs && chmod +x bin/dist/llmprobe.mjs",
+    "build:cli": "esbuild bin/llmprobe.ts --bundle --platform=node --format=esm --target=node20 --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --outfile=bin/dist/llmprobe.mjs && chmod +x bin/dist/llmprobe.mjs",
     "prepare": "npm run build:cli",
     "prepublishOnly": "npm run build:cli",
     "probe": "npm run build:cli && node bin/dist/llmprobe.mjs",
@@ -53,6 +53,7 @@
     "zod": "^3.25.76"
   },
   "dependencies": {
-    "chart.js": "^4.5.1"
+    "chart.js": "^4.5.1",
+    "undici": "^7.29.0"
   }
 }

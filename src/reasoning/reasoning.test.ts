@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { ADAPTERS } from "../conformance/index";
 import type { SurfaceAdapter } from "../core/adapter";
-import { EngineClient, type RunConfig } from "../core/client";
+import {
+  EngineClient,
+  type RunConfig,
+  TargetUnreachableError,
+} from "../core/client";
 import { createContext } from "../core/context";
 import { normalizeRoot } from "../core/probe";
 import { type MockEngine, startMockEngine } from "../fixtures/mock-engine";
@@ -86,6 +90,76 @@ describe("runReasoning partial results", () => {
 
     expect(report.total).toBe(1);
     expect(report.aborted?.reason).toBe("budget");
+    expect(report.scopeNote).toMatch(/1 of 2/);
+  });
+});
+
+describe("runReasoning transport blips", () => {
+  const build = async () => {
+    engine = await startMockEngine();
+    const config: RunConfig = {
+      baseUrl: `${normalizeRoot(engine.url)}/v1`,
+      apiKey: "",
+      model: "mock-model-12b",
+      timeoutMs: 15_000,
+      depth: "default",
+      reasoningHeadroom: 0,
+    };
+    const ctx = createContext({
+      config,
+      client: new EngineClient(config),
+      adapters: new Map<string, SurfaceAdapter>(ADAPTERS.map((a) => [a.id, a])),
+      present: new Set(["chat"]),
+      evalSurface: "chat",
+    });
+    return ctx;
+  };
+
+  test("one dropped socket mid-eval is retried, not fatal", async () => {
+    const ctx = await build();
+    const real = ctx.send.bind(ctx);
+    let calls = 0;
+    ctx.send = async (surface, request, options) => {
+      calls += 1;
+      if (calls === 1)
+        throw new TargetUnreachableError("/chat/completions", {
+          name: "TypeError",
+          message: "fetch failed",
+        });
+      return real(surface, request, options);
+    };
+
+    const report = await runReasoning(ctx, {
+      maxTokens: 64,
+      temperature: 0,
+      sequence: "1,2",
+    });
+
+    expect(report.total).toBe(2);
+    expect(report.aborted).toBeNull();
+  });
+
+  test("a dead target is declared after three tries, keeping answered cases", async () => {
+    const ctx = await build();
+    const real = ctx.send.bind(ctx);
+    let calls = 0;
+    ctx.send = async (surface, request, options) => {
+      calls += 1;
+      if (calls === 1) return real(surface, request, options);
+      throw new TargetUnreachableError("/chat/completions", {
+        name: "TypeError",
+        message: "fetch failed",
+      });
+    };
+
+    const report = await runReasoning(ctx, {
+      maxTokens: 64,
+      temperature: 0,
+      sequence: "1,2",
+    });
+
+    expect(report.total).toBe(1);
+    expect(report.aborted?.reason).toBe("unreachable");
     expect(report.scopeNote).toMatch(/1 of 2/);
   });
 });

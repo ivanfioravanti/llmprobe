@@ -34,3 +34,9 @@ jobs:
       # no GPU, no network, no engine required.
       - name: Test
         run: npm test
+
+      # The published artifact is the esbuild bundle, which vitest never loads.
+      # Prove it at least starts — a CJS dependency inlined into the ESM output
+      # throws "Dynamic require of ..." at import time, before any flag parses.
+      - name: CLI Bundle Smoke
+        run: npm run build:cli && node bin/dist/llmprobe.mjs --help
